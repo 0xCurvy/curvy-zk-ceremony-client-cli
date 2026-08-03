@@ -1,0 +1,33 @@
+{
+  "name": "@curvy/zk-ceremony-cli",
+  "version": "0.1.0",
+  "description": "Participant CLI for Curvy ZK phase-2 key generation ceremonies",
+  "type": "module",
+  "bin": {
+    "zk-ceremony": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^8.5.2",
+    "commander": "^13.1.0",
+    "snarkjs": "^0.7.5",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
