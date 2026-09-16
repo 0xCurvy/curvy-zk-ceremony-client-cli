@@ -92,6 +92,7 @@ program
   .option("--entropy <entropy>", "Entropy string (random if omitted)")
   .action(async (opts: { name: string; entropy?: string }) => {
     await waitAndContribute(opts);
+    process.exit(0);
   });
 
 program

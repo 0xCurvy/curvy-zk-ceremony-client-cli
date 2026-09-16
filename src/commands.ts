@@ -110,51 +110,131 @@ export async function waitAndContribute(opts: {
   const cfg = loadConfig();
   fs.mkdirSync(cfg.workDir, { recursive: true });
 
-  console.log(`Connecting to ${cfg.serverUrl} ...`);
-  const socket = io(cfg.serverUrl, {
-    auth: { token: cfg.apiKey },
-    transports: ["websocket"],
-  });
+  type QueueRow = {
+    circuit_id: number | string;
+    status: string;
+  };
 
-  socket.on("connect", () => {
-    console.log("Connected. Waiting for your turn...");
-  });
-
-  socket.on("connect_error", (err) => {
-    console.error("Socket error:", err.message);
-  });
-
-  socket.on(
-    "contribution:your-turn",
-    async (payload: {
-      circuitId: string | number;
-      deadline: string;
-      zkeyUrl: string;
-      artifactsUrl: string;
-      ptauUrl: string;
-    }) => {
-      console.log("Your turn!", payload);
-      console.log(
-        `This circuit uses PTAU ${ptauLabel(payload.ptauUrl)}`,
-      );
-      try {
-        await handleTurn(payload, opts.name, opts.entropy);
-        console.log("Contribution submitted for", payload.circuitId);
-      } catch (err) {
-        console.error("Contribution failed:", err);
+  const loadPendingCircuitIds = async (): Promise<Set<number>> => {
+    const status = (await getStatus()) as { queue: QueueRow[] };
+    const pending = new Set<number>();
+    for (const row of status.queue ?? []) {
+      if (row.status === "waiting" || row.status === "called") {
+        pending.add(Number(row.circuit_id));
       }
-    },
-  );
+    }
+    return pending;
+  };
 
-  socket.on(
-    "contribution:timeout",
-    (payload: { circuitId: string | number }) => {
-      console.warn("Timed out / skipped for", payload.circuitId);
-    },
-  );
+  let pending = await loadPendingCircuitIds();
+  if (pending.size === 0) {
+    console.log("All contributions complete.");
+    return;
+  }
 
-  socket.on("ceremony:complete", (payload: { circuitId: string | number }) => {
-    console.log("Ceremony complete:", payload.circuitId);
+  console.log(
+    `Subscribed to ${pending.size} circuit(s): ${[...pending].join(", ")}`,
+  );
+  console.log(`Connecting to ${cfg.serverUrl} ...`);
+
+  let announcedConnect = false;
+  let finished = false;
+  let turnsInFlight = 0;
+  let exitWhenIdle = false;
+
+  await new Promise<void>((resolve) => {
+    const socket = io(cfg.serverUrl, {
+      auth: { token: cfg.apiKey },
+      transports: ["websocket", "polling"],
+      reconnection: true,
+    });
+
+    const finish = (message: string) => {
+      if (finished) return;
+      finished = true;
+      console.log(message);
+      socket.removeAllListeners();
+      socket.disconnect();
+      resolve();
+    };
+
+    const refreshAndMaybeFinish = async () => {
+      if (finished) return;
+      if (turnsInFlight > 0) {
+        exitWhenIdle = true;
+        return;
+      }
+      try {
+        pending = await loadPendingCircuitIds();
+      } catch (err) {
+        console.warn(
+          "Could not refresh queue status:",
+          err instanceof Error ? err.message : err,
+        );
+        return;
+      }
+      if (pending.size === 0) {
+        finish("All contributions complete.");
+      }
+    };
+
+    socket.on("connect", () => {
+      if (!announcedConnect) {
+        announcedConnect = true;
+        console.log("Connected. Waiting for your turn...");
+      } else {
+        console.log("Reconnected. Still waiting for your turn...");
+      }
+    });
+
+    socket.on("connect_error", (err) => {
+      console.warn(`Socket reconnecting (${err.message})…`);
+    });
+
+    socket.on(
+      "contribution:your-turn",
+      async (payload: {
+        circuitId: string | number;
+        deadline: string;
+        zkeyUrl: string;
+        artifactsUrl: string;
+        ptauUrl: string;
+      }) => {
+        const circuitId = Number(payload.circuitId);
+        pending.add(circuitId);
+        turnsInFlight += 1;
+        console.log("Your turn!", payload);
+        console.log(`This circuit uses PTAU ${ptauLabel(payload.ptauUrl)}`);
+        try {
+          await handleTurn(payload, opts.name, opts.entropy);
+          console.log("Contribution submitted for", circuitId);
+        } catch (err) {
+          console.error("Contribution failed:", err);
+        } finally {
+          turnsInFlight -= 1;
+          if (exitWhenIdle || turnsInFlight === 0) {
+            await refreshAndMaybeFinish();
+          }
+        }
+      },
+    );
+
+    socket.on(
+      "contribution:timeout",
+      (payload: { circuitId: string | number }) => {
+        console.warn("Timed out / skipped for", payload.circuitId);
+        void refreshAndMaybeFinish();
+      },
+    );
+
+    socket.on("ceremony:complete", (payload: { circuitId: string | number }) => {
+      console.log("Ceremony complete:", payload.circuitId);
+      void refreshAndMaybeFinish();
+    });
+
+    process.once("SIGINT", () => {
+      finish("Interrupted.");
+    });
   });
 }
 

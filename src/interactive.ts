@@ -188,14 +188,13 @@ export async function runInteractive(): Promise<void> {
             default: "",
           });
           console.log(
-            "Listening for your turn. Press Ctrl+C when finished.\n",
+            "Listening for your turn. Press Ctrl+C to abort.\n",
           );
           await waitAndContribute({
             name: name.trim() || "contributor",
             ...(entropy.trim() ? { entropy: entropy.trim() } : {}),
           });
-          // waitAndContribute keeps the process alive via the socket
-          return;
+          process.exit(0);
         }
         case "exit":
           console.log("Bye.");
