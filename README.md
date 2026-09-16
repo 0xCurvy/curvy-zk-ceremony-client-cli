@@ -26,7 +26,8 @@ zk-ceremony config set \
   --api-key ck_...
 
 zk-ceremony circuits
-zk-ceremony apply <circuitId>
+zk-ceremony apply <circuitId> [circuitId...]
+zk-ceremony apply --all             # all open circuits not already joined
 zk-ceremony artifacts <circuitId>
 zk-ceremony artifacts <circuitId> --download-ptau
 zk-ceremony ptau <circuitId>        # download this circuit's PTAU only

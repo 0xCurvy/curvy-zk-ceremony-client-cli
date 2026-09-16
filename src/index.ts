@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import {
+  applyToAllOpenCircuits,
   applyToCircuit,
+  applyToCircuits,
   downloadArtifacts,
   downloadCircuitPtau,
   getStatus,
@@ -42,10 +44,27 @@ program
 
 program
   .command("apply")
-  .argument("<circuitId>", "Circuit id")
-  .description("Apply to a circuit contribution queue")
-  .action(async (circuitId: string) => {
-    const data = await applyToCircuit(circuitId);
+  .argument("[circuitIds...]", "One or more circuit ids")
+  .option(
+    "--all",
+    "Apply to every open/running circuit not already joined",
+  )
+  .description(
+    "Apply to circuit queue(s). Pass ids, or use --all for every open circuit you have not joined yet.",
+  )
+  .action(async (circuitIds: string[], opts: { all?: boolean }) => {
+    if (opts.all) {
+      const data = await applyToAllOpenCircuits();
+      console.log(JSON.stringify(data, null, 2));
+      return;
+    }
+    if (!circuitIds.length) {
+      throw new Error("Provide circuit id(s) or use --all");
+    }
+    const data =
+      circuitIds.length === 1
+        ? await applyToCircuit(circuitIds[0]!)
+        : await applyToCircuits(circuitIds);
     console.log(JSON.stringify(data, null, 2));
   });
 

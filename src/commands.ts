@@ -45,8 +45,80 @@ export async function listCircuits(): Promise<{ circuits: CircuitSummary[] }> {
   return api<{ circuits: CircuitSummary[] }>("GET", "/circuits");
 }
 
-export async function applyToCircuit(circuitId: string): Promise<unknown> {
-  return api("POST", `/circuits/${circuitId}/apply`);
+export type ApplyResult = {
+  circuitId: number;
+  userId: number;
+  position: number;
+  status: string;
+  created: boolean;
+  alreadyApplied: boolean;
+};
+
+export type ApplyBatchResponse = {
+  results: Array<ApplyResult | { circuitId: number | string; error: string }>;
+  summary: {
+    requested: number;
+    created: number;
+    alreadyApplied: number;
+    failed: number;
+  };
+};
+
+export async function applyToCircuits(
+  circuitIds: Array<string | number>,
+): Promise<ApplyBatchResponse> {
+  const ids = [...new Set(circuitIds.map((id) => String(id).trim()).filter(Boolean))];
+  if (ids.length === 0) {
+    throw new Error("At least one circuit id is required");
+  }
+  return api<ApplyBatchResponse>("POST", "/circuits/apply", {
+    body: { circuitIds: ids },
+  });
+}
+
+export async function applyToCircuit(
+  circuitId: string | number,
+): Promise<ApplyResult> {
+  const batch = await applyToCircuits([circuitId]);
+  const first = batch.results[0];
+  if (!first) {
+    throw new Error("Empty apply response");
+  }
+  if ("error" in first) {
+    throw new Error(first.error);
+  }
+  return first;
+}
+
+/** Apply to every open/running circuit the user has not already joined. */
+export async function applyToAllOpenCircuits(): Promise<ApplyBatchResponse> {
+  const [{ circuits }, status] = await Promise.all([
+    listCircuits(),
+    getStatus() as Promise<{
+      queue: Array<{ circuit_id: number | string }>;
+    }>,
+  ]);
+
+  const already = new Set(
+    (status.queue ?? []).map((q) => Number(q.circuit_id)),
+  );
+  const targets = (circuits ?? [])
+    .map((c) => Number(c.id))
+    .filter((id) => Number.isFinite(id) && !already.has(id));
+
+  if (targets.length === 0) {
+    return {
+      results: [],
+      summary: {
+        requested: 0,
+        created: 0,
+        alreadyApplied: (circuits ?? []).length,
+        failed: 0,
+      },
+    };
+  }
+
+  return applyToCircuits(targets);
 }
 
 export async function getStatus(): Promise<unknown> {

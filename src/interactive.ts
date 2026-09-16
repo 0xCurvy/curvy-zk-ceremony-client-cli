@@ -1,5 +1,6 @@
 import { confirm, input, password, select } from "@inquirer/prompts";
 import {
+  applyToAllOpenCircuits,
   applyToCircuit,
   downloadArtifacts,
   downloadCircuitPtau,
@@ -7,6 +8,7 @@ import {
   listCircuits,
   setConfig,
   waitAndContribute,
+  type ApplyBatchResponse,
   type CircuitSummary,
 } from "./commands.js";
 import { loadConfig } from "./config.js";
@@ -16,6 +18,7 @@ type MenuAction =
   | "config"
   | "circuits"
   | "apply"
+  | "apply-all"
   | "artifacts"
   | "ptau"
   | "status"
@@ -28,6 +31,36 @@ function circuitLabel(c: CircuitSummary): string {
   const status = c.status ? ` [${c.status}]` : "";
   const ptau = c.ptauUrl ? ` · ${ptauLabel(c.ptauUrl)}` : "";
   return `${id}${name}${status}${ptau}`;
+}
+
+function printApplyBatch(data: ApplyBatchResponse): void {
+  const { summary, results } = data;
+  if (summary.requested === 0 && summary.alreadyApplied > 0) {
+    console.log(
+      `Already applied to all ${summary.alreadyApplied} open circuit(s). Nothing new to join.`,
+    );
+    return;
+  }
+  if (summary.requested === 0) {
+    console.log("No open circuits to apply to.");
+    return;
+  }
+  console.log(
+    `Applied: ${summary.created} new · already joined: ${summary.alreadyApplied} · failed: ${summary.failed}`,
+  );
+  for (const row of results) {
+    if ("error" in row) {
+      console.log(`  circuit ${row.circuitId}: error — ${row.error}`);
+    } else if (row.created) {
+      console.log(
+        `  circuit ${row.circuitId}: joined (position ${row.position})`,
+      );
+    } else {
+      console.log(
+        `  circuit ${row.circuitId}: already applied (${row.status})`,
+      );
+    }
+  }
 }
 
 async function pickCircuit(prompt: string): Promise<string | null> {
@@ -118,6 +151,10 @@ export async function runInteractive(): Promise<void> {
         { name: "Configure CLI", value: "config" },
         { name: "List circuits", value: "circuits" },
         { name: "Apply to a circuit", value: "apply" },
+        {
+          name: "Apply to all open circuits (skip ones already joined)",
+          value: "apply-all",
+        },
         { name: "Download artifacts", value: "artifacts" },
         {
           name: "Download circuit PTAU (size varies per circuit)",
@@ -150,6 +187,11 @@ export async function runInteractive(): Promise<void> {
           if (!circuitId) break;
           const data = await applyToCircuit(circuitId);
           console.log(JSON.stringify(data, null, 2));
+          break;
+        }
+        case "apply-all": {
+          const data = await applyToAllOpenCircuits();
+          printApplyBatch(data);
           break;
         }
         case "artifacts": {
