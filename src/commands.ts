@@ -293,8 +293,20 @@ export async function waitAndContribute(opts: {
 
     socket.on(
       "contribution:timeout",
-      (payload: { circuitId: string | number }) => {
-        console.warn("Timed out / skipped for", payload.circuitId);
+      (payload: {
+        circuitId: string | number;
+        reason?: string;
+        requeued?: boolean;
+      }) => {
+        if (payload.requeued) {
+          console.warn(
+            `Timed out / skipped for ${payload.circuitId} — requeued; waiting for another turn...`,
+          );
+        } else {
+          console.warn(
+            `Timed out / skipped for ${payload.circuitId} (no further turn)`,
+          );
+        }
         void refreshAndMaybeFinish();
       },
     );
