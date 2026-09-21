@@ -279,7 +279,6 @@ export async function waitAndContribute(opts: {
         console.log(`This circuit uses PTAU ${ptauLabel(payload.ptauUrl)}`);
         try {
           await handleTurn(payload, opts.name, opts.entropy);
-          console.log("Contribution submitted for", circuitId);
         } catch (err) {
           console.error("Contribution failed:", err);
         } finally {
@@ -308,6 +307,50 @@ export async function waitAndContribute(opts: {
           );
         }
         void refreshAndMaybeFinish();
+      },
+    );
+
+    // The server acknowledges an upload right away and verifies it in the
+    // background (minutes for a large circuit); the verdict arrives here.
+    socket.on("contribution:accepted", (payload: { circuitId: string | number }) => {
+      console.log("Contribution verified and accepted for", payload.circuitId);
+      void refreshAndMaybeFinish();
+    });
+
+    socket.on(
+      "contribution:rejected",
+      (payload: { circuitId: string | number; reason: string }) => {
+        if (payload.reason === "stale") {
+          console.warn(
+            `Upload for ${payload.circuitId} was verified after that turn had ended — discarded`,
+          );
+        } else {
+          console.error(
+            `Contribution for ${payload.circuitId} failed verification (no further turn)`,
+          );
+        }
+        void refreshAndMaybeFinish();
+      },
+    );
+
+    socket.on(
+      "contribution:error",
+      async (payload: { circuitId: string | number; message: string }) => {
+        const circuitId = Number(payload.circuitId);
+        console.warn(
+          `Server could not verify the upload for ${circuitId} (${payload.message}); uploading again...`,
+        );
+        turnsInFlight += 1;
+        try {
+          await uploadContribution(String(circuitId));
+        } catch (err) {
+          console.error("Re-upload failed:", err);
+        } finally {
+          turnsInFlight -= 1;
+          if (exitWhenIdle || turnsInFlight === 0) {
+            await refreshAndMaybeFinish();
+          }
+        }
       },
     );
 
@@ -356,12 +399,27 @@ async function handleTurn(
   console.log("Running snarkjs zkey contribute...");
   await snarkjs.zKey.contribute(inputZkey, outputZkey, name, entropy);
 
+  await uploadContribution(circuitId);
+}
+
+async function uploadContribution(circuitId: string): Promise<void> {
+  const cfg = loadConfig();
+  const outputZkey = path.join(cfg.workDir, circuitId, "contributed.zkey");
   const form = new FormData();
   const blob = new Blob([fs.readFileSync(outputZkey)]);
   form.append("file", blob, "contributed.zkey");
 
-  const result = await api("POST", `/circuits/${circuitId}/contribute`, {
-    formData: form,
-  });
-  console.log(result);
+  console.log("Uploading contribution...");
+  const result = await api<{ status?: string }>(
+    "POST",
+    `/circuits/${circuitId}/contribute`,
+    { formData: form },
+  );
+  if (result.status === "verifying") {
+    console.log(
+      `Upload received for ${circuitId}; the server is verifying it (your deadline is paused)...`,
+    );
+  } else {
+    console.log("Contribution submitted for", circuitId, result);
+  }
 }
