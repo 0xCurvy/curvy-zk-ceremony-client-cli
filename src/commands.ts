@@ -1,5 +1,8 @@
 import fs from "node:fs";
+import http from "node:http";
+import https from "node:https";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { io } from "socket.io-client";
 import { api, loadConfig, saveConfig, type CliConfig } from "./config.js";
@@ -185,6 +188,8 @@ export async function waitAndContribute(opts: {
   type QueueRow = {
     circuit_id: number | string;
     status: string;
+    circuit_status?: string;
+    verifying?: boolean;
   };
 
   const loadPendingCircuitIds = async (): Promise<Set<number>> => {
@@ -250,6 +255,90 @@ export async function waitAndContribute(opts: {
       }
     };
 
+    type TurnPayload = {
+      circuitId: string | number;
+      deadline?: string;
+      zkeyUrl: string;
+      artifactsUrl?: string;
+      ptauUrl: string;
+    };
+
+    /** Circuits whose turn this process is working on (download → upload). */
+    const activeTurns = new Set<number>();
+
+    const runTurn = async (payload: TurnPayload, pickedUp: boolean) => {
+      const circuitId = Number(payload.circuitId);
+      // The your-turn event and the on-connect check can both announce the same
+      // turn; only one of them may run it.
+      if (activeTurns.has(circuitId)) return;
+      activeTurns.add(circuitId);
+      pending.add(circuitId);
+      turnsInFlight += 1;
+      console.log(
+        pickedUp ? "Your turn (already called, picking it up)!" : "Your turn!",
+        payload,
+      );
+      console.log(`This circuit uses PTAU ${ptauLabel(payload.ptauUrl)}`);
+      try {
+        await handleTurn(payload, opts.name, opts.entropy);
+      } catch (err) {
+        console.error("Contribution failed:", err);
+      } finally {
+        activeTurns.delete(circuitId);
+        turnsInFlight -= 1;
+        if (exitWhenIdle || turnsInFlight === 0) {
+          await refreshAndMaybeFinish();
+        }
+      }
+    };
+
+    // The server announces a turn once, to whoever is connected at that moment.
+    // A CLI started after it was called, or whose socket dropped around it,
+    // would otherwise wait out the whole deadline — so every (re)connect checks
+    // for a turn that is already ours. One the server is verifying is left alone.
+    const pickUpCalledTurns = async () => {
+      let rows: QueueRow[];
+      try {
+        rows = ((await getStatus()) as { queue: QueueRow[] }).queue ?? [];
+      } catch (err) {
+        console.warn(
+          "Could not check for an open turn:",
+          err instanceof Error ? err.message : err,
+        );
+        return;
+      }
+      for (const row of rows) {
+        const circuitId = Number(row.circuit_id);
+        if (
+          row.status !== "called" ||
+          row.verifying ||
+          row.circuit_status !== "running" ||
+          activeTurns.has(circuitId)
+        ) {
+          continue;
+        }
+        try {
+          const manifest = await api<{ ptauUrl: string }>(
+            "GET",
+            `/circuits/${circuitId}/artifacts`,
+          );
+          void runTurn(
+            {
+              circuitId,
+              zkeyUrl: `${cfg.serverUrl.replace(/\/$/, "")}/circuits/${circuitId}/current-zkey`,
+              ptauUrl: manifest.ptauUrl,
+            },
+            true,
+          );
+        } catch (err) {
+          console.warn(
+            `Could not pick up the turn for ${circuitId}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+    };
+
     socket.on("connect", () => {
       if (!announcedConnect) {
         announcedConnect = true;
@@ -257,38 +346,16 @@ export async function waitAndContribute(opts: {
       } else {
         console.log("Reconnected. Still waiting for your turn...");
       }
+      void pickUpCalledTurns();
     });
 
     socket.on("connect_error", (err) => {
       console.warn(`Socket reconnecting (${err.message})…`);
     });
 
-    socket.on(
-      "contribution:your-turn",
-      async (payload: {
-        circuitId: string | number;
-        deadline: string;
-        zkeyUrl: string;
-        artifactsUrl: string;
-        ptauUrl: string;
-      }) => {
-        const circuitId = Number(payload.circuitId);
-        pending.add(circuitId);
-        turnsInFlight += 1;
-        console.log("Your turn!", payload);
-        console.log(`This circuit uses PTAU ${ptauLabel(payload.ptauUrl)}`);
-        try {
-          await handleTurn(payload, opts.name, opts.entropy);
-        } catch (err) {
-          console.error("Contribution failed:", err);
-        } finally {
-          turnsInFlight -= 1;
-          if (exitWhenIdle || turnsInFlight === 0) {
-            await refreshAndMaybeFinish();
-          }
-        }
-      },
-    );
+    socket.on("contribution:your-turn", (payload: TurnPayload) => {
+      void runTurn(payload, false);
+    });
 
     socket.on(
       "contribution:timeout",
@@ -402,19 +469,106 @@ async function handleTurn(
   await uploadContribution(circuitId);
 }
 
+/** A transfer that moves no bytes for this long is treated as dead. */
+const UPLOAD_STALL_MS = 10 * 60_000;
+
+/**
+ * POST one file as multipart/form-data, streamed from disk.
+ *
+ * Not fetch(): Node's fetch (undici) gives up if response headers have not
+ * arrived 300 s after the request started, and that clock includes sending the
+ * body — a zkey of a few hundred MB on a slow uplink never finishes uploading.
+ * Here only a stall fails the request, however long the upload takes.
+ */
+function postFile(
+  route: string,
+  filePath: string,
+): Promise<{ status: number; body: string }> {
+  const cfg = loadConfig();
+  const url = new URL(`${cfg.serverUrl.replace(/\/$/, "")}${route}`);
+  const boundary = `----zk-ceremony-${randomUUID()}`;
+  const head = Buffer.from(
+    `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${path.basename(filePath)}"\r\n` +
+      `Content-Type: application/octet-stream\r\n\r\n`,
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+  const size = fs.statSync(filePath).size;
+  const transport = url.protocol === "https:" ? https : http;
+
+  return new Promise((resolve, reject) => {
+    const req = transport.request(
+      url,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cfg.apiKey}`,
+          "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          "Content-Length": head.length + size + tail.length,
+        },
+      },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => (body += chunk));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+        res.on("error", reject);
+      },
+    );
+    req.on("error", reject);
+    req.setTimeout(UPLOAD_STALL_MS, () =>
+      req.destroy(new Error(`upload stalled for ${UPLOAD_STALL_MS / 60_000} min`)),
+    );
+
+    // One growing line: "0.........10.........20 ... 100", a dot per percent.
+    // Bytes are counted as they are read; the pipe's backpressure keeps that
+    // within a buffer of what has actually gone out on the socket.
+    let sent = 0;
+    let shown = 0;
+    let lineOpen = true;
+    const closeLine = () => {
+      if (lineOpen) process.stdout.write("\n");
+      lineOpen = false;
+    };
+    process.stdout.write(
+      `Uploading contribution (${(size / 1e6).toFixed(size < 10e6 ? 1 : 0)} MB): 0`,
+    );
+    req.once("close", closeLine);
+
+    const file = fs.createReadStream(filePath);
+    file.on("data", (chunk) => {
+      sent += chunk.length;
+      const pct = size > 0 ? Math.floor((sent / size) * 100) : 100;
+      let out = "";
+      while (shown < pct) {
+        shown += 1;
+        out += shown % 10 === 0 ? String(shown) : ".";
+      }
+      if (out) process.stdout.write(out);
+    });
+    file.on("error", (err) => req.destroy(err));
+    file.on("end", () => {
+      closeLine();
+      req.end(tail);
+    });
+    req.write(head);
+    file.pipe(req, { end: false });
+  });
+}
+
 async function uploadContribution(circuitId: string): Promise<void> {
   const cfg = loadConfig();
   const outputZkey = path.join(cfg.workDir, circuitId, "contributed.zkey");
-  const form = new FormData();
-  const blob = new Blob([fs.readFileSync(outputZkey)]);
-  form.append("file", blob, "contributed.zkey");
+  const route = `/circuits/${circuitId}/contribute`;
 
-  console.log("Uploading contribution...");
-  const result = await api<{ status?: string }>(
-    "POST",
-    `/circuits/${circuitId}/contribute`,
-    { formData: form },
-  );
+  const { status, body } = await postFile(route, outputZkey);
+  const result = (body ? JSON.parse(body) : {}) as {
+    status?: string;
+    error?: string;
+  };
+  if (status < 200 || status >= 300) {
+    throw new Error(`POST ${route} failed: ${status} ${result.error || body}`);
+  }
   if (result.status === "verifying") {
     console.log(
       `Upload received for ${circuitId}; the server is verifying it (your deadline is paused)...`,
