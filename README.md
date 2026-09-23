@@ -25,7 +25,7 @@ To build a binary for your own machine locally (requires [Bun](https://bun.sh)):
 
 ```bash
 bun install
-npm run build:bin   # -> release/zk-ceremony
+npm run build:bin   # -> release/zk-ceremony (see scripts/build-bin.ts)
 ```
 
 ## Install (local)

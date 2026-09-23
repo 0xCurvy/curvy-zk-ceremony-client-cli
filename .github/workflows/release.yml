@@ -52,9 +52,8 @@ jobs:
       - name: Compile single-file executable
         run: |
           mkdir -p release
-          bun build --compile --minify \
-            --target=${{ matrix.target }} \
-            src/index.ts \
+          bun scripts/build-bin.ts \
+            --target ${{ matrix.target }} \
             --outfile "release/${BIN_NAME}${{ matrix.ext }}"
 
       - name: Smoke test (linux-x64 only)

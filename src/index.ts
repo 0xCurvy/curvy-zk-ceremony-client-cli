@@ -17,7 +17,7 @@ const program = new Command();
 program
   .name("zk-ceremony")
   .description("Participant CLI for Curvy ZK phase-2 ceremonies")
-  .version("0.1.0")
+  .version("0.1.1")
   .action(async () => {
     await runInteractive();
   });
