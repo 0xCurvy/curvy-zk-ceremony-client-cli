@@ -2,6 +2,32 @@
 
 Isolated participant CLI for Curvy ZK phase-2 ceremonies.
 
+## Install (prebuilt binary)
+
+Every `v*` tag publishes single-file executables (built with `bun build --compile`) to
+[GitHub Releases](https://github.com/0xCurvy/curvy-zk-ceremony-client-cli/releases):
+
+| Platform | Asset |
+| --- | --- |
+| Linux x64 | `zk-ceremony-linux-x64.tar.gz` |
+| macOS Intel | `zk-ceremony-darwin-x64.tar.gz` |
+| macOS Apple Silicon | `zk-ceremony-darwin-arm64.tar.gz` |
+| Windows x64 | `zk-ceremony-windows-x64.zip` |
+
+A `SHA256SUMS` file is attached to each release. No Node.js runtime is required.
+
+```bash
+tar -xzf zk-ceremony-darwin-arm64.tar.gz
+./zk-ceremony
+```
+
+To build a binary for your own machine locally (requires [Bun](https://bun.sh)):
+
+```bash
+bun install
+npm run build:bin   # -> release/zk-ceremony
+```
+
 ## Install (local)
 
 ```bash

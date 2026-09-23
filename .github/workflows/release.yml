@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BIN_NAME: zk-ceremony
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-linux-x64
+            asset: linux-x64
+            ext: ""
+            archive: tar.gz
+          - target: bun-darwin-x64
+            asset: darwin-x64
+            ext: ""
+            archive: tar.gz
+          - target: bun-darwin-arm64
+            asset: darwin-arm64
+            ext: ""
+            archive: tar.gz
+          - target: bun-windows-x64
+            asset: windows-x64
+            ext: ".exe"
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Compile single-file executable
+        run: |
+          mkdir -p release
+          bun build --compile --minify \
+            --target=${{ matrix.target }} \
+            src/index.ts \
+            --outfile "release/${BIN_NAME}${{ matrix.ext }}"
+
+      - name: Smoke test (linux-x64 only)
+        if: matrix.target == 'bun-linux-x64'
+        run: ./release/${BIN_NAME} --version
+
+      - name: Package
+        id: package
+        run: |
+          cd release
+          NAME="${BIN_NAME}-${{ matrix.asset }}"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            zip -q "${NAME}.zip" "${BIN_NAME}${{ matrix.ext }}"
+            echo "file=${NAME}.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar -czf "${NAME}.tar.gz" "${BIN_NAME}${{ matrix.ext }}"
+            echo "file=${NAME}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+          rm -f "${BIN_NAME}${{ matrix.ext }}"
+          sha256sum "${NAME}."* > "${NAME}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BIN_NAME }}-${{ matrix.asset }}
+          path: release/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Build checksum manifest
+        run: |
+          cd assets
+          cat *.sha256 > SHA256SUMS
+          rm -f *.sha256
+          ls -la
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

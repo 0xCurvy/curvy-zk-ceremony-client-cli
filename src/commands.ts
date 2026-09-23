@@ -3,7 +3,7 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
+import * as snarkjs from "snarkjs";
 import { io } from "socket.io-client";
 import { api, loadConfig, saveConfig, type CliConfig } from "./config.js";
 import {
@@ -11,18 +11,6 @@ import {
   ptauLabel,
   writeCircuitPtauNote,
 } from "./ptau.js";
-
-const require = createRequire(import.meta.url);
-const snarkjs = require("snarkjs") as {
-  zKey: {
-    contribute: (
-      input: string,
-      output: string,
-      name: string,
-      entropy: string,
-    ) => Promise<unknown>;
-  };
-};
 
 export interface CircuitSummary {
   id?: string | number;
