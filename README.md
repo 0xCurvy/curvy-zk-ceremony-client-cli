@@ -10,11 +10,15 @@ Every `v*` tag publishes single-file executables (built with `bun build --compil
 | Platform | Asset |
 | --- | --- |
 | Linux x64 | `zk-ceremony-linux-x64.tar.gz` |
+| Linux arm64 | `zk-ceremony-linux-arm64.tar.gz` |
+| Linux x64, musl (Alpine) | `zk-ceremony-linux-x64-musl.tar.gz` |
+| Linux arm64, musl (Alpine) | `zk-ceremony-linux-arm64-musl.tar.gz` |
 | macOS Intel | `zk-ceremony-darwin-x64.tar.gz` |
 | macOS Apple Silicon | `zk-ceremony-darwin-arm64.tar.gz` |
 | Windows x64 | `zk-ceremony-windows-x64.zip` |
 
-A `SHA256SUMS` file is attached to each release. No Node.js runtime is required.
+A `SHA256SUMS` file is attached to each release. No Node.js runtime is required. The musl
+builds need the C++ runtime on Alpine: `apk add libstdc++`.
 
 ```bash
 tar -xzf zk-ceremony-darwin-arm64.tar.gz

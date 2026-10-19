@@ -1,6 +1,6 @@
 {
   "name": "@curvy/zk-ceremony-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Participant CLI for Curvy ZK phase-2 key generation ceremonies",
   "type": "module",
   "bin": {

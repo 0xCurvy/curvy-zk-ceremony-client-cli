@@ -24,6 +24,18 @@ jobs:
             asset: linux-x64
             ext: ""
             archive: tar.gz
+          - target: bun-linux-arm64
+            asset: linux-arm64
+            ext: ""
+            archive: tar.gz
+          - target: bun-linux-x64-musl
+            asset: linux-x64-musl
+            ext: ""
+            archive: tar.gz
+          - target: bun-linux-arm64-musl
+            asset: linux-arm64-musl
+            ext: ""
+            archive: tar.gz
           - target: bun-darwin-x64
             asset: darwin-x64
             ext: ""
